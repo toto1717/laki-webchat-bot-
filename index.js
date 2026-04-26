@@ -13,7 +13,6 @@ const PORT = process.env.PORT || 3000;
 
 const userLanguage = {};
 const userInquiryState = {};
-const userQuickFlow = {};
 
 const COMMANDS = {
   menu: ["menu", "мени"],
@@ -33,6 +32,14 @@ function matchesCommand(text, commandList = []) {
 
 function containsAny(text = "", keywords = []) {
   return keywords.some((keyword) => text.includes(keyword));
+}
+
+function cleanBotReply(text = "") {
+  return String(text || "")
+    .replace(/\*\*/g, "")
+    .replace(/#{1,6}\s?/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function detectLanguage(text = "") {
@@ -87,33 +94,25 @@ function getLanguageMenu() {
 function getEnglishMenu() {
   return (
     "Laki Hotel & Spa 🏨\n\n" +
-    "You can ask me about rooms, apartments, spa, restaurant, parking, location, contact, prices or availability.\n\n" +
-    "If you would like an offer, just write your dates or ask for price/availability."
+    "You can ask me about rooms, apartments, spa, restaurant, parking, location, prices or availability.\n\n" +
+    "If you would like an offer, write your dates."
   );
 }
 
 function getMacedonianMenu() {
   return (
     "Laki Hotel & Spa 🏨\n\n" +
-    "Можете да ме прашате за соби, апартмани, СПА, ресторан, паркинг, локација, контакт, цени или достапност.\n\n" +
-    "Ако сакате понуда, само напишете датуми или прашајте за цена/слободно."
+    "Можете да ме прашате за соби, апартмани, СПА, ресторан, паркинг, локација, цени или достапност.\n\n" +
+    "Ако сакате понуда, напишете ги датумите."
   );
 }
 
 function getHumanFallback(language = "en") {
   if (language === "mk") {
-    return (
-      "Ќе ми треба уште малку информација за да ви одговорам точно 😊\n\n" +
-      "Можете да прашате за соби, апартмани, СПА, ресторан, паркинг, локација или понуда.\n\n" +
-      `За директен контакт: ${hotelKnowledge.hotel.email} / ${hotelKnowledge.hotel.phone}`
-    );
+    return "Можете да ме прашате за соба, апартман, СПА, паркинг, локација или понуда 😊";
   }
 
-  return (
-    "I may need a little more information to answer this accurately 😊\n\n" +
-    "You can ask me about rooms, apartments, spa, restaurant, parking, location or an offer.\n\n" +
-    `For direct contact: ${hotelKnowledge.hotel.email} / ${hotelKnowledge.hotel.phone}`
-  );
+  return "You can ask me about rooms, apartments, spa, parking, location or an offer 😊";
 }
 
 function addSoftNextStep(replyText, language, options = {}) {
@@ -122,34 +121,44 @@ function addSoftNextStep(replyText, language, options = {}) {
   if (!offer) return replyText;
 
   if (language === "mk") {
-    return (
-      replyText +
-      "\n\nДоколку планирате престој, можам да ви помогнам да испратиме барање за понуда со датумите и број на гости 😊"
-    );
+    return replyText + "\n\nАко сакате понуда, напишете ги датумите на престој 😊";
   }
 
-  return (
-    replyText +
-    "\n\nIf you are planning a stay, I can help you send an offer request with your dates and number of guests 😊"
-  );
+  return replyText + "\n\nIf you would like an offer, please write your stay dates 😊";
+}
+
+/* =========================
+   SMART DATE / BOOKING PARSER
+   ========================= */
+
+function padDay(value) {
+  return String(value).padStart(2, "0");
+}
+
+function normalizeParserText(text = "") {
+  return text
+    .toLowerCase()
+    .replace(/[–—]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function detectMonthNumber(text = "") {
   const t = text.toLowerCase();
 
   const months = [
-    { keys: ["јануари", "januari", "january"], value: "01" },
-    { keys: ["февруари", "fevruari", "february"], value: "02" },
-    { keys: ["март", "mart", "march"], value: "03" },
-    { keys: ["април", "april"], value: "04" },
+    { keys: ["јануари", "januari", "january", "jan"], value: "01" },
+    { keys: ["февруари", "fevruari", "february", "feb"], value: "02" },
+    { keys: ["март", "mart", "march", "mar"], value: "03" },
+    { keys: ["април", "april", "apr"], value: "04" },
     { keys: ["мај", "maj", "may"], value: "05" },
-    { keys: ["јуни", "juni", "june"], value: "06" },
-    { keys: ["јули", "juli", "july"], value: "07" },
-    { keys: ["август", "avgust", "august"], value: "08" },
-    { keys: ["септември", "septemvri", "september"], value: "09" },
-    { keys: ["октомври", "oktomvri", "october"], value: "10" },
-    { keys: ["ноември", "noemvri", "november"], value: "11" },
-    { keys: ["декември", "dekemvri", "december"], value: "12" },
+    { keys: ["јуни", "juni", "june", "jun"], value: "06" },
+    { keys: ["јули", "juli", "july", "jul"], value: "07" },
+    { keys: ["август", "avgust", "august", "aug"], value: "08" },
+    { keys: ["септември", "septemvri", "september", "sep"], value: "09" },
+    { keys: ["октомври", "oktomvri", "october", "oct"], value: "10" },
+    { keys: ["ноември", "noemvri", "november", "nov"], value: "11" },
+    { keys: ["декември", "dekemvri", "december", "dec"], value: "12" },
   ];
 
   for (const month of months) {
@@ -159,41 +168,275 @@ function detectMonthNumber(text = "") {
   return null;
 }
 
-function padDay(value) {
-  return String(value).padStart(2, "0");
+function getCurrentYear() {
+  return new Date().getFullYear();
+}
+
+function makeDate(day, month, year) {
+  const d = new Date(Number(year), Number(month) - 1, Number(day));
+
+  if (
+    d.getFullYear() !== Number(year) ||
+    d.getMonth() !== Number(month) - 1 ||
+    d.getDate() !== Number(day)
+  ) {
+    return null;
+  }
+
+  return d;
+}
+
+function formatDateDMY(date) {
+  return `${padDay(date.getDate())}.${padDay(date.getMonth() + 1)}.${date.getFullYear()}`;
+}
+
+function addDays(date, days) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + Number(days));
+  return d;
+}
+
+function guessFutureYear(day, month, text = "") {
+  const yearMatch = text.match(/\b(20\d{2})\b/);
+  if (yearMatch) return Number(yearMatch[1]);
+
+  const year = getCurrentYear();
+  const candidate = makeDate(day, month, year);
+  const today = new Date();
+  const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+  if (candidate && candidate < todayOnly) return year + 1;
+
+  return year;
+}
+
+function extractNumberWord(text = "") {
+  const t = text.toLowerCase();
+
+  const numbers = [
+    { keys: ["еден", "една", "едно", "one"], value: 1 },
+    { keys: ["два", "две", "two"], value: 2 },
+    { keys: ["три", "three"], value: 3 },
+    { keys: ["четири", "four"], value: 4 },
+    { keys: ["пет", "five"], value: 5 },
+    { keys: ["шест", "six"], value: 6 },
+    { keys: ["седум", "seven"], value: 7 },
+    { keys: ["осум", "eight"], value: 8 },
+    { keys: ["девет", "nine"], value: 9 },
+    { keys: ["десет", "ten"], value: 10 },
+  ];
+
+  for (const item of numbers) {
+    if (item.keys.some((key) => t.includes(key))) return item.value;
+  }
+
+  return null;
+}
+
+function extractGuestCount(text = "") {
+  const t = normalizeParserText(text);
+
+  const explicit = t.match(
+    /\b(\d{1,2})\s*(лица|лице|гости|гостин|возрасни|persons|people|guests|adults)\b/
+  );
+
+  if (explicit) return Number(explicit[1]);
+
+  if (
+    t.includes("двајца") ||
+    t.includes("два лица") ||
+    t.includes("две лица") ||
+    t.includes("2 persons") ||
+    t.includes("2 people") ||
+    t.includes("2 guests") ||
+    t.includes("couple")
+  ) {
+    return 2;
+  }
+
+  const wordNumber = extractNumberWord(t);
+  if (
+    wordNumber &&
+    (t.includes("лица") ||
+      t.includes("гости") ||
+      t.includes("возрасни") ||
+      t.includes("people") ||
+      t.includes("guests") ||
+      t.includes("adults"))
+  ) {
+    return wordNumber;
+  }
+
+  return null;
+}
+
+function getWeekendDates(nextWeekend = false) {
+  const today = new Date();
+  const day = today.getDay();
+  let daysUntilFriday = (5 - day + 7) % 7;
+
+  if (nextWeekend || daysUntilFriday === 0) {
+    daysUntilFriday += 7;
+  }
+
+  const friday = addDays(today, daysUntilFriday);
+  const sunday = addDays(friday, 2);
+
+  return {
+    checkin: formatDateDMY(friday),
+    checkout: formatDateDMY(sunday),
+  };
 }
 
 function extractBookingInfo(text = "") {
-  const t = text.toLowerCase();
+  const t = normalizeParserText(text);
 
   let checkin = null;
   let checkout = null;
-  let guests = null;
+  let guests = extractGuestCount(t);
 
   const month = detectMonthNumber(t);
   const yearMatch = t.match(/\b(20\d{2})\b/);
-  const year = yearMatch ? yearMatch[1] : "2026";
+  const explicitYear = yearMatch ? Number(yearMatch[1]) : null;
 
-  const fullDateMatches = [...t.matchAll(/(\d{1,2})\.(\d{1,2})\.(20\d{2})/g)];
+  const fullDateMatches = [
+    ...t.matchAll(/\b(\d{1,2})[./-](\d{1,2})[./-](20\d{2})\b/g),
+  ];
 
   if (fullDateMatches.length >= 2) {
-    checkin = `${padDay(fullDateMatches[0][1])}.${padDay(fullDateMatches[0][2])}.${fullDateMatches[0][3]}`;
-    checkout = `${padDay(fullDateMatches[1][1])}.${padDay(fullDateMatches[1][2])}.${fullDateMatches[1][3]}`;
-  } else {
-    const rangeMatch = t.match(/(\d{1,2})\s*(?:до|-|–|—|\/)\s*(\d{1,2})/);
+    const d1 = makeDate(fullDateMatches[0][1], fullDateMatches[0][2], fullDateMatches[0][3]);
+    const d2 = makeDate(fullDateMatches[1][1], fullDateMatches[1][2], fullDateMatches[1][3]);
 
-    if (rangeMatch && month) {
-      checkin = `${padDay(rangeMatch[1])}.${month}.${year}`;
-      checkout = `${padDay(rangeMatch[2])}.${month}.${year}`;
-    } else if (rangeMatch) {
-      checkin = rangeMatch[1];
-      checkout = rangeMatch[2];
+    if (d1 && d2 && d2 > d1) {
+      return {
+        checkin: formatDateDMY(d1),
+        checkout: formatDateDMY(d2),
+        guests,
+      };
     }
   }
 
-  if (t.includes("два") || t.includes("2") || t.includes("two")) guests = 2;
-  if (t.includes("три") || t.includes("3") || t.includes("three")) guests = 3;
-  if (t.includes("четири") || t.includes("4") || t.includes("four")) guests = 4;
+  const singleFullDate = t.match(/\b(\d{1,2})[./-](\d{1,2})[./-](20\d{2})\b/);
+  const nightsMatch = t.match(/\b(\d{1,2})\s*(ноќи|ноќ|nights|night)\b/);
+
+  if (singleFullDate && nightsMatch) {
+    const start = makeDate(singleFullDate[1], singleFullDate[2], singleFullDate[3]);
+    const nights = Number(nightsMatch[1]);
+
+    if (start && nights > 0) {
+      const end = addDays(start, nights);
+      return {
+        checkin: formatDateDMY(start),
+        checkout: formatDateDMY(end),
+        guests,
+      };
+    }
+  }
+
+  const rangeSameMonth = t.match(
+    /\b(?:од\s*)?(\d{1,2})\s*(?:-?\s*(?:ти|ви|ми|th|st|nd|rd))?\s*(?:-|до|to|until|till|\/)\s*(\d{1,2})\s*(?:-?\s*(?:ти|ви|ми|th|st|nd|rd))?/i
+  );
+
+  if (rangeSameMonth && month) {
+    const startYear = explicitYear || guessFutureYear(rangeSameMonth[1], month, t);
+    const d1 = makeDate(rangeSameMonth[1], month, startYear);
+    const d2 = makeDate(rangeSameMonth[2], month, startYear);
+
+    if (d1 && d2 && d2 > d1) {
+      return {
+        checkin: formatDateDMY(d1),
+        checkout: formatDateDMY(d2),
+        guests,
+      };
+    }
+  }
+
+  const dayMonthToDayMonth = t.match(
+    /\b(\d{1,2})\s*(?:-?\s*(?:ти|ви|ми|th|st|nd|rd))?\s*([a-zа-шѓќљњџѕј]+)\s*(?:-|до|to|until|till)\s*(\d{1,2})\s*(?:-?\s*(?:ти|ви|ми|th|st|nd|rd))?\s*([a-zа-шѓќљњџѕј]+)\b/i
+  );
+
+  if (dayMonthToDayMonth) {
+    const m1 = detectMonthNumber(dayMonthToDayMonth[2]);
+    const m2 = detectMonthNumber(dayMonthToDayMonth[4]);
+
+    if (m1 && m2) {
+      const y1 = explicitYear || guessFutureYear(dayMonthToDayMonth[1], m1, t);
+      const y2 = Number(m2) < Number(m1) ? y1 + 1 : y1;
+
+      const d1 = makeDate(dayMonthToDayMonth[1], m1, y1);
+      const d2 = makeDate(dayMonthToDayMonth[3], m2, y2);
+
+      if (d1 && d2 && d2 > d1) {
+        return {
+          checkin: formatDateDMY(d1),
+          checkout: formatDateDMY(d2),
+          guests,
+        };
+      }
+    }
+  }
+
+  if (t.includes("утре") || t.includes("tomorrow")) {
+    const start = addDays(new Date(), 1);
+    let nights = 1;
+
+    if (nightsMatch) {
+      nights = Number(nightsMatch[1]);
+    } else {
+      const wordNights = extractNumberWord(t);
+      if (wordNights && (t.includes("ноќи") || t.includes("ноќ") || t.includes("nights"))) {
+        nights = wordNights;
+      }
+    }
+
+    const end = addDays(start, nights);
+
+    return {
+      checkin: formatDateDMY(start),
+      checkout: formatDateDMY(end),
+      guests,
+    };
+  }
+
+  const afterDaysMatch = t.match(/\b(?:за|после|after)\s*(\d{1,2})\s*(дена|денови|ден|days|day)\b/);
+
+  if (afterDaysMatch) {
+    const start = addDays(new Date(), Number(afterDaysMatch[1]));
+    const nights = nightsMatch ? Number(nightsMatch[1]) : 1;
+    const end = addDays(start, nights);
+
+    return {
+      checkin: formatDateDMY(start),
+      checkout: formatDateDMY(end),
+      guests,
+    };
+  }
+
+  if (
+    t.includes("следен викенд") ||
+    t.includes("нареден викенд") ||
+    t.includes("next weekend")
+  ) {
+    const dates = getWeekendDates(true);
+    return {
+      checkin: dates.checkin,
+      checkout: dates.checkout,
+      guests,
+    };
+  }
+
+  if (
+    t.includes("овој викенд") ||
+    t.includes("викендов") ||
+    t.includes("this weekend")
+  ) {
+    const dates = getWeekendDates(false);
+    return {
+      checkin: dates.checkin,
+      checkout: dates.checkout,
+      guests,
+    };
+  }
 
   return { checkin, checkout, guests };
 }
@@ -288,22 +531,8 @@ function detectDirectIntent(text = "", language = "en") {
 function getDirectIntentReply(intent, language) {
   if (intent === "internal_phone") {
     return language === "mk"
-      ? "📞 Почитувани,\n\n" +
-          "од вашата соба можете директно да се јавите:\n\n" +
-          "– Рецепција: 0\n" +
-          "– Ресторан: 501\n" +
-          "– Спа центар: 502\n" +
-          "– Базен: 503\n" +
-          "– Кујна: 504\n\n" +
-          "Доколку ви треба нешто, слободно обратете се 😊"
-      : "📞 Dear guest,\n\n" +
-          "from your room you can call directly:\n\n" +
-          "– Reception: 0\n" +
-          "– Restaurant: 501\n" +
-          "– Spa center: 502\n" +
-          "– Pool: 503\n" +
-          "– Kitchen: 504\n\n" +
-          "If you need anything, feel free to contact us 😊";
+      ? "📞 Од соба можете директно да се јавите:\n\nРецепција: 0\nРесторан: 501\nСпа центар: 502\nБазен: 503\nКујна: 504"
+      : "📞 From your room you can call directly:\n\nReception: 0\nRestaurant: 501\nSpa center: 502\nPool: 503\nKitchen: 504";
   }
 
   return null;
@@ -311,19 +540,34 @@ function getDirectIntentReply(intent, language) {
 
 function resetInquiryFlow(from) {
   delete userInquiryState[from];
-  delete userQuickFlow[from];
 }
 
-function startInquiryFlow(from, language) {
+function startInquiryFlow(from, language, prefilledData = {}) {
   userInquiryState[from] = {
-    step: "checkin",
+    step: prefilledData.checkin && prefilledData.checkout ? "adults" : "checkin",
     language,
-    data: {},
+    data: {
+      ...prefilledData,
+    },
   };
 
+  if (prefilledData.checkin && prefilledData.checkout) {
+    if (prefilledData.adults) {
+      userInquiryState[from].step = "children";
+
+      return language === "mk"
+        ? `Одлично 😊\nCheck-in: ${prefilledData.checkin}\nCheck-out: ${prefilledData.checkout}\nВозрасни: ${prefilledData.adults}\n\nДали ќе има деца? Ако нема, внесете 0.`
+        : `Great 😊\nCheck-in: ${prefilledData.checkin}\nCheck-out: ${prefilledData.checkout}\nAdults: ${prefilledData.adults}\n\nWill there be any children? If none, enter 0.`;
+    }
+
+    return language === "mk"
+      ? `Одлично 😊\nCheck-in: ${prefilledData.checkin}\nCheck-out: ${prefilledData.checkout}\n\nКолку возрасни гости ќе има?`
+      : `Great 😊\nCheck-in: ${prefilledData.checkin}\nCheck-out: ${prefilledData.checkout}\n\nHow many adults will stay?`;
+  }
+
   return language === "mk"
-    ? "Супер 😊\nЗа да ви подготвиме понуда, ќе ми требаат неколку информации.\n\n👉 Прво внесете check-in датум.\nПример: 10.04.2026"
-    : "Great 😊\nTo prepare an offer, I’ll need a few details.\n\n👉 First, please enter your check-in date.\nExample: 10.04.2026";
+    ? "Супер 😊\nЗа кој период планирате престој?\nПример: 20-25 јуни"
+    : "Great 😊\nFor which dates are you planning your stay?\nExample: 20-25 June";
 }
 
 function isValidDateFormat(value) {
@@ -426,6 +670,19 @@ function isExplicitOfferRequest(text, language) {
   );
 }
 
+function isRoomOrApartmentRequest(text = "") {
+  const t = text.toLowerCase();
+
+  return (
+    t.includes("соба") ||
+    t.includes("соби") ||
+    t.includes("room") ||
+    t.includes("rooms") ||
+    t.includes("апартман") ||
+    t.includes("apartment")
+  );
+}
+
 function isGeneralHotelQuestion(text) {
   const t = text.toLowerCase();
 
@@ -465,84 +722,77 @@ async function handleInquiryStep(from, rawText) {
   if (!inquiry) return null;
 
   const language = inquiry.language;
-  const msg = rawText.trim();
+  let msg = rawText.trim();
   const lowerMsg = msg.toLowerCase();
 
   if (matchesCommand(lowerMsg, COMMANDS.cancel)) {
     resetInquiryFlow(from);
     return language === "mk"
-      ? "Во ред, барањето е откажано 😊\nАко сакате, можете повторно да прашате за понуда, соби, СПА, паркинг или локација."
-      : "No problem, the inquiry has been cancelled 😊\nYou can ask again about an offer, rooms, spa, parking or location whenever you like.";
+      ? "Во ред, барањето е откажано 😊"
+      : "No problem, the inquiry has been cancelled 😊";
   }
 
   if (matchesCommand(lowerMsg, COMMANDS.menu)) {
     return language === "mk" ? getMacedonianMenu() : getEnglishMenu();
   }
 
-  const directIntent = detectDirectIntent(msg, language);
-  if (directIntent) {
-    const directReply = getDirectIntentReply(directIntent, language);
-
-    if (directReply) {
-      return (
-        directReply +
-        "\n\n" +
-        (language === "mk"
-          ? "Кога ќе бидете подготвени, продолжете со check-in датумот за понудата."
-          : "When you are ready, please continue with the check-in date for the offer.")
-      );
-    }
-  }
-
-  const faqReply = getFaqReply(msg, language);
-  if (faqReply && !faqReply.triggersInquiryFlow) {
-    return (
-      buildSmartFaqReply(faqReply, msg, language) +
-      "\n\n" +
-      (language === "mk"
-        ? "Кога ќе бидете подготвени, внесете check-in датум за понудата."
-        : "When you are ready, please enter the check-in date for the offer.")
-    );
-  }
-
-  if (isGeneralHotelQuestion(msg) && !isExplicitOfferRequest(msg, language)) {
-    const aiReply = await getAiReply({
-      message: msg,
-      language,
-      faqContext: hotelKnowledge.faq
-        .map((f) => `${f.id}: ${language === "mk" ? f.textMk : f.textEn}`)
-        .join("\n"),
-    });
-
-    return (
-      aiReply +
-      "\n\n" +
-      (language === "mk"
-        ? "Кога ќе бидете подготвени, внесете check-in датум за понудата."
-        : "When you are ready, please enter the check-in date for the offer.")
-    );
-  }
-
   if (inquiry.step === "checkin") {
+    const parsed = extractBookingInfo(msg);
+
+    if (parsed.checkin && parsed.checkout) {
+      const checkinDate = parseDate(parsed.checkin);
+      const checkoutDate = parseDate(parsed.checkout);
+
+      if (!checkinDate || !checkoutDate || checkoutDate <= checkinDate) {
+        return language === "mk"
+          ? "Check-out мора да биде после check-in.\nПробајте повторно, пример: 20-25 јуни 😊"
+          : "Check-out must be after check-in.\nPlease try again, example: 20-25 June 😊";
+      }
+
+      inquiry.data.checkin = parsed.checkin;
+      inquiry.data.checkout = parsed.checkout;
+
+      if (parsed.guests && Number(parsed.guests) > 0) {
+        inquiry.data.adults = String(parsed.guests);
+        inquiry.step = "children";
+
+        return language === "mk"
+          ? `Одлично 😊\nCheck-in: ${parsed.checkin}\nCheck-out: ${parsed.checkout}\nВозрасни: ${parsed.guests}\n\nДали ќе има деца? Ако нема, внесете 0.`
+          : `Great 😊\nCheck-in: ${parsed.checkin}\nCheck-out: ${parsed.checkout}\nAdults: ${parsed.guests}\n\nWill there be any children? If none, enter 0.`;
+      }
+
+      inquiry.step = "adults";
+
+      return language === "mk"
+        ? `Одлично 😊\nCheck-in: ${parsed.checkin}\nCheck-out: ${parsed.checkout}\n\nКолку возрасни гости ќе има?`
+        : `Great 😊\nCheck-in: ${parsed.checkin}\nCheck-out: ${parsed.checkout}\n\nHow many adults will stay?`;
+    }
+
     if (!isValidDateFormat(msg) || !parseDate(msg)) {
       return language === "mk"
-        ? "Можете да ми напишете датум во формат: 10.04.2026 😊"
-        : "Please write the date in this format: 10.04.2026 😊";
+        ? "Напишете ги датумите, пример: 20-25 јуни 😊"
+        : "Please write the dates, example: 20-25 June 😊";
     }
 
     inquiry.data.checkin = msg;
     inquiry.step = "checkout";
 
     return language === "mk"
-      ? "Одлично 😊\n\n👉 Сега напишете check-out датум.\nПример: 12.04.2026"
-      : "Great 😊\n\n👉 Now please enter your check-out date.\nExample: 12.04.2026";
+      ? "Одлично 😊\nНапишете check-out датум."
+      : "Great 😊\nPlease enter your check-out date.";
   }
 
   if (inquiry.step === "checkout") {
+    const parsed = extractBookingInfo(msg);
+
+    if (parsed.checkin && parsed.checkout) {
+      msg = parsed.checkout;
+    }
+
     if (!isValidDateFormat(msg) || !parseDate(msg)) {
       return language === "mk"
-        ? "Внесете check-out датум во формат: 12.04.2026 😊"
-        : "Please enter the check-out date in this format: 12.04.2026 😊";
+        ? "Внесете check-out датум во формат: 25.06.2026 😊"
+        : "Please enter check-out date in this format: 25.06.2026 😊";
     }
 
     const checkinDate = parseDate(inquiry.data.checkin);
@@ -550,31 +800,34 @@ async function handleInquiryStep(from, rawText) {
 
     if (!checkinDate || !checkoutDate || checkoutDate <= checkinDate) {
       return language === "mk"
-        ? "Check-out датумот мора да биде после check-in датумот.\nВнесете валиден check-out датум 😊"
-        : "Check-out date must be after check-in date.\nPlease enter a valid check-out date 😊";
+        ? "Check-out датумот мора да биде после check-in датумот 😊"
+        : "Check-out date must be after check-in date 😊";
     }
 
     inquiry.data.checkout = msg;
     inquiry.step = "adults";
 
     return language === "mk"
-      ? "Супер 👍\nКолку возрасни гости ќе има?\nВнесете број, на пример: 2"
-      : "Perfect 👍\nHow many adults will stay?\nEnter a number, for example: 2";
+      ? "Колку возрасни гости ќе има?"
+      : "How many adults will stay?";
   }
 
   if (inquiry.step === "adults") {
-    if (!isPositiveInteger(msg) || Number(msg) < 1) {
+    const parsedGuests = extractGuestCount(msg);
+    const adultsValue = parsedGuests ? String(parsedGuests) : msg;
+
+    if (!isPositiveInteger(adultsValue) || Number(adultsValue) < 1) {
       return language === "mk"
-        ? "Бројот на возрасни мора да биде најмалку 1.\nВнесете број, на пример: 2"
-        : "The number of adults must be at least 1.\nEnter a number, for example: 2";
+        ? "Внесете број на возрасни гости, пример: 2"
+        : "Please enter the number of adults, example: 2";
     }
 
-    inquiry.data.adults = msg;
+    inquiry.data.adults = adultsValue;
     inquiry.step = "children";
 
     return language === "mk"
-      ? "Дали ќе има деца? 😊\nАко има, внесете број. Ако нема, внесете 0."
-      : "Will there be any children? 😊\nIf yes, enter the number. If none, enter 0.";
+      ? "Дали ќе има деца? Ако нема, внесете 0."
+      : "Will there be any children? If none, enter 0.";
   }
 
   if (inquiry.step === "children") {
@@ -590,7 +843,7 @@ async function handleInquiryStep(from, rawText) {
       inquiry.step = "children_ages";
 
       return language === "mk"
-        ? "Внесете ја возраста на децата, одвоена со запирка.\nПример: 4, 7"
+        ? "Внесете возраст на децата, одвоена со запирка.\nПример: 4, 7"
         : "Please enter the children's ages, separated by commas.\nExample: 4, 7";
     }
 
@@ -598,29 +851,29 @@ async function handleInquiryStep(from, rawText) {
     inquiry.step = "name";
 
     return language === "mk"
-      ? "Одлично. На кое име да ја подготвиме понудата? 😊"
-      : "Great. Under which name should we prepare the offer? 😊";
+      ? "На кое име да ја подготвиме понудата?"
+      : "Under which name should we prepare the offer?";
   }
 
   if (inquiry.step === "children_ages") {
     if (!isValidChildrenAges(msg)) {
       return language === "mk"
-        ? "Внесете ја возраста на децата со броеви, одвоени со запирка.\nПример: 4, 7"
-        : "Please enter the children's ages as numbers, separated by commas.\nExample: 4, 7";
+        ? "Внесете возраст со броеви, пример: 4, 7"
+        : "Please enter ages as numbers, example: 4, 7";
     }
 
     inquiry.data.childrenAges = msg;
     inquiry.step = "name";
 
     return language === "mk"
-      ? "Одлично. На кое име да ја подготвиме понудата? 😊"
-      : "Great. Under which name should we prepare the offer? 😊";
+      ? "На кое име да ја подготвиме понудата?"
+      : "Under which name should we prepare the offer?";
   }
 
   if (inquiry.step === "name") {
     if (!isValidName(msg)) {
       return language === "mk"
-        ? "Внесете валидно име и презиме 😊"
+        ? "Внесете име и презиме 😊"
         : "Please enter a valid name 😊";
     }
 
@@ -628,8 +881,8 @@ async function handleInquiryStep(from, rawText) {
     inquiry.step = "email";
 
     return language === "mk"
-      ? "Ве молиме внесете e-mail адреса каде што може да ја добиете понудата 📧"
-      : "Please enter the email address where you would like to receive the offer 📧";
+      ? "Внесете e-mail адреса за да ви испратиме понуда 📧"
+      : "Please enter your email address so we can send you an offer 📧";
   }
 
   if (inquiry.step === "email") {
@@ -643,8 +896,8 @@ async function handleInquiryStep(from, rawText) {
     inquiry.step = "special_request";
 
     return language === "mk"
-      ? "Дали имате дополнително барање?\nПример: baby crib, late arrival, поглед кон езеро.\n\nАко немате, напишете: нема"
-      : "Do you have any additional request?\nExample: baby crib, late arrival, lake view.\n\nIf none, type: none";
+      ? "Дали имате дополнително барање?\nАко немате, напишете: нема"
+      : "Do you have any additional request?\nIf none, type: none";
   }
 
   if (inquiry.step === "special_request") {
@@ -701,9 +954,8 @@ async function handleInquiryStep(from, rawText) {
       `Email: ${inquiry.data.email}\n` +
       `Дополнително барање: ${specialRequestMk}\n\n` +
       (emailSent
-        ? "Вашето барање е успешно испратено до нашиот тим. Ќе ви испратиме понуда што е можно поскоро 😊\n"
-        : "Вашето барање е примено, но моментално има проблем со автоматското e-mail испраќање. Ве молиме контактирајте нè директно.\n") +
-      `Контакт: ${hotelKnowledge.hotel.email} / ${hotelKnowledge.hotel.phone}`;
+        ? "Нашиот тим ќе ви испрати понуда што е можно поскоро 😊"
+        : "Барањето е примено, но има проблем со автоматското e-mail испраќање.");
 
     const summaryEn =
       "Thank you 🙏\nYour inquiry has been received.\n\n" +
@@ -715,9 +967,8 @@ async function handleInquiryStep(from, rawText) {
       `Email: ${inquiry.data.email}\n` +
       `Additional request: ${specialRequestEn}\n\n` +
       (emailSent
-        ? "Your inquiry has been sent to our team. We will send you an offer as soon as possible 😊\n"
-        : "Your inquiry has been received, but there is currently a problem with automatic email delivery. Please contact us directly.\n") +
-      `Contact: ${hotelKnowledge.hotel.email} / ${hotelKnowledge.hotel.phone}`;
+        ? "Our team will send you an offer as soon as possible 😊"
+        : "Your inquiry was received, but there is a problem with automatic email delivery.");
 
     resetInquiryFlow(from);
     return language === "mk" ? summaryMk : summaryEn;
@@ -737,7 +988,7 @@ async function detectIntentWithAI(message, language) {
     const prompt = `
 You are a hotel intent classifier.
 
-Return ONLY valid JSON in this format:
+Return ONLY valid JSON:
 {
   "intent": "spa | restaurant | parking | location | contact | rooms | offer | checkin_checkout | children_policy | baby_crib | internal_phone | unknown",
   "guestType": "family | couple | none",
@@ -746,15 +997,11 @@ Return ONLY valid JSON in this format:
 }
 
 Rules:
-- Use "offer" ONLY when the guest EXPLICITLY asks about price, rates, booking, reservation, availability, cost, quote, or sending an offer.
-- If the guest is only asking generally about the hotel, services, rooms, spa, restaurant, or says things like "tell me more", "what do you offer", "I am interested in the hotel", DO NOT use "offer".
-- In such cases use the closest intent like "rooms", "spa", "restaurant", or "unknown".
-- Set "needsInquiry" to true ONLY for explicit booking / price / availability requests.
-- guestType = "family" if the message clearly mentions family, kids, children, baby.
-- guestType = "couple" if the message clearly mentions couple, romantic stay, honeymoon, two persons.
-- If unclear, use "unknown" and "none".
-- Do not add explanation text, only JSON.
-- Use "internal_phone" when the guest asks how to call reception, restaurant, spa, kitchen, or any hotel department from the room phone.
+- Use "offer" only for explicit price, booking, reservation, availability, quote, or offer request.
+- Use "rooms" for room/apartment questions.
+- Use "internal_phone" for calling departments from room phone.
+- needsInquiry true only for booking/price/availability.
+- Return only JSON.
 
 Message: "${message}"
 `;
@@ -788,22 +1035,22 @@ function buildSmartFaqReply(faqReply, rawText, currentLanguage) {
   if (faqReply.id === "spa") {
     replyText +=
       currentLanguage === "mk"
-        ? "\n\nСПА делот е одличен избор ако доаѓате за релаксација, особено во комбинација со престој во соба или апартман."
-        : "\n\nThe spa area is a great choice if you are coming for relaxation, especially combined with a stay in a room or apartment.";
+        ? "\n\nСПА работи од 11:00 до 21:00 и е одличен избор за релаксација."
+        : "\n\nThe spa is open from 11:00 to 21:00 and is a great choice for relaxation.";
   }
 
   if (faqReply.id === "parking") {
     replyText +=
       currentLanguage === "mk"
-        ? "\n\nОва е практично ако доаѓате со автомобил, бидејќи не мора да барате паркинг околу хотелот."
-        : "\n\nThis is convenient if you are arriving by car, because you do not need to look for parking around the hotel.";
+        ? "\n\nПаркингот е бесплатен и надворешен."
+        : "\n\nParking is free and outdoor.";
   }
 
   if (faqReply.id === "location") {
     replyText +=
       currentLanguage === "mk"
-        ? "\n\nЛокацијата е добра ако сакате помирен престој, а сепак да сте блиску до Охрид и плажа."
-        : "\n\nThe location is a good choice if you want a calmer stay while still being close to Ohrid and the beach.";
+        ? "\n\nЛокацијата е добра за помирен престој, блиску до плажа и Охрид."
+        : "\n\nThe location is good for a calm stay, close to the beach and Ohrid.";
   }
 
   if (faqReply.id === "rooms") {
@@ -819,8 +1066,8 @@ function buildSmartFaqReply(faqReply, rawText, currentLanguage) {
     ) {
       replyText +=
         currentLanguage === "mk"
-          ? "\n\nЗа семејства, најчесто е попрактичен апартман бидејќи има повеќе простор и удобност."
-          : "\n\nFor families, an apartment is usually more practical because it offers more space and comfort.";
+          ? "\n\nЗа семејства, најчесто е попрактичен апартман."
+          : "\n\nFor families, an apartment is usually more practical.";
     } else if (
       textLower.includes("couple") ||
       textLower.includes("romantic") ||
@@ -832,8 +1079,8 @@ function buildSmartFaqReply(faqReply, rawText, currentLanguage) {
     ) {
       replyText +=
         currentLanguage === "mk"
-          ? "\n\nЗа двајца, двокреветна соба е одличен избор за удобен и мирен престој."
-          : "\n\nFor two persons, a double room is a great choice for a comfortable and relaxing stay.";
+          ? "\n\nЗа двајца, двокреветна соба е добар избор."
+          : "\n\nFor two persons, a double room is a good choice.";
     }
   }
 
@@ -847,23 +1094,62 @@ function buildSmartFaqReply(faqReply, rawText, currentLanguage) {
 function getGuestTypeReply(guestType, currentLanguage) {
   if (guestType === "family") {
     return currentLanguage === "mk"
-      ? "За семејства со деца, најчесто препорачуваме апартман за повеќе простор и удобност 😊\n\nАко сакате, можам да ви помогнам да испратиме барање за понуда со датумите, бројот на возрасни и возраста на децата."
-      : "For families with children, we usually recommend an apartment for more space and comfort 😊\n\nIf you’d like, I can help you send an offer request with your dates, number of adults and children’s ages.";
+      ? "За семејства со деца, најчесто препорачуваме апартман 😊\nНапишете ги датумите за престој."
+      : "For families with children, we usually recommend an apartment 😊\nPlease write your stay dates.";
   }
 
   if (guestType === "couple") {
     return currentLanguage === "mk"
-      ? "За двајца, двокреветна соба е одличен избор за удобен и мирен престој 😊\n\nАко сакате, можам да ви помогнам да испратиме барање за понуда со вашите датуми."
-      : "For two persons, a double room is a great choice for a comfortable and relaxing stay 😊\n\nIf you’d like, I can help you send an offer request with your dates.";
+      ? "За двајца, двокреветна соба е добар избор 😊\nНапишете ги датумите за престој."
+      : "For two persons, a double room is a good choice 😊\nPlease write your stay dates.";
   }
 
   return null;
 }
 
+async function getSafeAiReply(rawText, currentLanguage) {
+  const aiReply = await getAiReply({
+    message:
+      currentLanguage === "mk"
+        ? `
+Ти си web chat асистент за Laki Hotel & Spa.
+
+Одговарај кратко, природно и како рецепционер.
+Без долги објаснувања.
+Без markdown **bold**.
+Не измислувај цени или достапност.
+Не кажувај "пишете ни меил" или "јавете се" освен ако има технички проблем.
+Ако гостинот бара цена/достапност/резервација, побарај датуми или продолжи кон понуда.
+
+Прашање:
+${rawText}
+        `
+        : `
+You are the web chat assistant for Laki Hotel & Spa.
+
+Reply briefly, naturally and like a receptionist.
+No long explanations.
+No markdown **bold**.
+Never invent prices or availability.
+Do not tell the guest to email or call unless there is a technical issue.
+If the guest asks for price/availability/booking, ask for dates or continue toward an offer request.
+
+Guest question:
+${rawText}
+        `,
+    language: currentLanguage,
+    faqContext: hotelKnowledge.faq
+      .map((f) => `${f.id}: ${currentLanguage === "mk" ? f.textMk : f.textEn}`)
+      .join("\n"),
+  });
+
+  return cleanBotReply(aiReply);
+}
+
 async function processGuestMessage(from, rawText) {
   const text = rawText.toLowerCase().trim();
   let reply = "";
-  const currentLanguage = userLanguage[from] || null;
+  let currentLanguage = userLanguage[from] || null;
 
   if (matchesCommand(rawText, COMMANDS.language)) {
     delete userLanguage[from];
@@ -878,6 +1164,10 @@ async function processGuestMessage(from, rawText) {
   }
 
   if (!currentLanguage) {
+    const detectedLanguage = detectLanguage(rawText);
+    userLanguage[from] = detectedLanguage;
+    currentLanguage = detectedLanguage;
+
     if (text === "1" || text === "english" || text === "en") {
       userLanguage[from] = "en";
       return getSmartGreeting("en");
@@ -888,94 +1178,26 @@ async function processGuestMessage(from, rawText) {
       return getSmartGreeting("mk");
     }
 
-    const detectedLanguage = detectLanguage(rawText);
-    userLanguage[from] = detectedLanguage;
-    return getSmartGreeting(detectedLanguage);
-  }
+    const parsedFirst = extractBookingInfo(rawText);
 
-  if (userQuickFlow[from]) {
-    const flow = userQuickFlow[from];
-    const parsed = extractBookingInfo(rawText);
-
-    if (flow.step === "dates") {
-      if (parsed.checkin && parsed.checkout) {
-        flow.data = {
-          ...flow.data,
-          checkin: parsed.checkin,
-          checkout: parsed.checkout,
-          guests: parsed.guests || flow.data.guests || 2,
-        };
-
-        flow.step = "email";
-
-        return currentLanguage === "mk"
-          ? `Одлично 👍 ${flow.data.checkin}-${flow.data.checkout} за ${flow.data.guests} лица.\n\nВнесете e-mail за да ја испратиме понудата 📧`
-          : `Great 👍 ${flow.data.checkin}-${flow.data.checkout} for ${flow.data.guests} guests.\n\nPlease enter your email so we can send the offer 📧`;
-      }
-
-      return currentLanguage === "mk"
-        ? "Само внесете ги датумите 😊\nПример: 20 до 26 јуни двајца"
-        : "Please enter the dates 😊\nExample: 20 to 26 June for two";
+    if (parsedFirst.checkin && parsedFirst.checkout) {
+      return startInquiryFlow(from, currentLanguage, {
+        checkin: parsedFirst.checkin,
+        checkout: parsedFirst.checkout,
+        adults: parsedFirst.guests ? String(parsedFirst.guests) : undefined,
+      });
     }
 
-    if (flow.step === "email") {
-      if (!isValidEmail(rawText.trim())) {
-        return currentLanguage === "mk"
-          ? "Внесете валидна e-mail адреса 😊"
-          : "Please enter a valid email address 😊";
-      }
-
-      try {
-        await sendInquiryEmail({
-          fromWebchat: from,
-          language: currentLanguage,
-          roomType: flow.data.type,
-          checkin: flow.data.checkin,
-          checkout: flow.data.checkout,
-          adults: flow.data.guests || 2,
-          children: "0",
-          childrenAges: "",
-          name: "Web chat guest",
-          email: rawText.trim(),
-          specialRequest: "Quick room offer request",
-          replyTo: rawText.trim(),
-        });
-
-        delete userQuickFlow[from];
-
-        return currentLanguage === "mk"
-          ? "Барањето е испратено ✅ Ќе добиете понуда наскоро 😊"
-          : "Request sent ✅ You will receive an offer soon 😊";
-      } catch (err) {
-        console.error("Quick flow email error:", err?.message || err);
-        delete userQuickFlow[from];
-
-        return currentLanguage === "mk"
-          ? `Барањето е примено, но има проблем со автоматското e-mail испраќање. Ве молиме контактирајте нè директно: ${hotelKnowledge.hotel.email} / ${hotelKnowledge.hotel.phone}`
-          : `Your request was received, but there is a problem with automatic email delivery. Please contact us directly: ${hotelKnowledge.hotel.email} / ${hotelKnowledge.hotel.phone}`;
-      }
+    if (isRoomOrApartmentRequest(rawText) || shouldStartInquiryFlow(rawText, currentLanguage)) {
+      return getSmartGreeting(currentLanguage) + "\n\n" + startInquiryFlow(from, currentLanguage);
     }
-  }
 
-  if (
-    !userInquiryState[from] &&
-    !userQuickFlow[from] &&
-    (text.includes("соба") || text.includes("room"))
-  ) {
-    userQuickFlow[from] = {
-      step: "dates",
-      language: currentLanguage,
-      data: { type: "room" },
-    };
-
-    return currentLanguage === "mk"
-      ? "Супер 😊 Кажете ми ги датумите на престој."
-      : "Great 😊 Please tell me your stay dates.";
+    return getSmartGreeting(currentLanguage);
   }
 
   if (userInquiryState[from]) {
     reply = await handleInquiryStep(from, rawText);
-    if (reply) return reply;
+    if (reply) return cleanBotReply(reply);
   }
 
   if (matchesCommand(rawText, COMMANDS.menu)) {
@@ -985,8 +1207,8 @@ async function processGuestMessage(from, rawText) {
   if (matchesCommand(rawText, COMMANDS.cancel)) {
     resetInquiryFlow(from);
     return currentLanguage === "mk"
-      ? "Во ред, откажано е 😊\nКако можам да ви помогнам понатаму?"
-      : "No problem, it is cancelled 😊\nHow can I help you further?";
+      ? "Во ред, откажано е 😊"
+      : "No problem, it is cancelled 😊";
   }
 
   if (matchesCommand(rawText, COMMANDS.contact)) {
@@ -995,7 +1217,21 @@ async function processGuestMessage(from, rawText) {
         ? getFaqReply("contact", "mk")?.text || hotelKnowledge.hotel.fallbackMessageMk
         : getFaqReply("contact", "en")?.text || hotelKnowledge.hotel.fallbackMessageEn;
 
-    return contactReply;
+    return cleanBotReply(contactReply);
+  }
+
+  const parsedDates = extractBookingInfo(rawText);
+
+  if (parsedDates.checkin && parsedDates.checkout) {
+    return startInquiryFlow(from, currentLanguage, {
+      checkin: parsedDates.checkin,
+      checkout: parsedDates.checkout,
+      adults: parsedDates.guests ? String(parsedDates.guests) : undefined,
+    });
+  }
+
+  if (isRoomOrApartmentRequest(rawText)) {
+    return startInquiryFlow(from, currentLanguage);
   }
 
   if (shouldStartInquiryFlow(rawText, currentLanguage)) {
@@ -1005,7 +1241,7 @@ async function processGuestMessage(from, rawText) {
   const directIntent = detectDirectIntent(rawText, currentLanguage);
   if (directIntent) {
     const directReply = getDirectIntentReply(directIntent, currentLanguage);
-    if (directReply) return directReply;
+    if (directReply) return cleanBotReply(directReply);
   }
 
   const aiIntent = await detectIntentWithAI(rawText, currentLanguage);
@@ -1019,80 +1255,34 @@ async function processGuestMessage(from, rawText) {
 
   if (aiIntent?.intent === "internal_phone") {
     const internalPhoneReply = getDirectIntentReply("internal_phone", currentLanguage);
-    if (internalPhoneReply) return internalPhoneReply;
+    if (internalPhoneReply) return cleanBotReply(internalPhoneReply);
   }
 
   const guestTypeReply = getGuestTypeReply(aiIntent?.guestType, currentLanguage);
-  if (guestTypeReply) return guestTypeReply;
+  if (guestTypeReply) return cleanBotReply(guestTypeReply);
 
   const faqFromIntent = getFaqReply(aiIntent?.intent, currentLanguage);
   if (faqFromIntent) {
     return faqFromIntent.triggersInquiryFlow
       ? startInquiryFlow(from, currentLanguage)
-      : buildSmartFaqReply(faqFromIntent, rawText, currentLanguage);
+      : cleanBotReply(buildSmartFaqReply(faqFromIntent, rawText, currentLanguage));
   }
 
   const faqReply = getFaqReply(rawText, currentLanguage);
   if (faqReply) {
-    const smartReply = buildSmartFaqReply(faqReply, rawText, currentLanguage);
     return faqReply.triggersInquiryFlow
       ? startInquiryFlow(from, currentLanguage)
-      : smartReply;
+      : cleanBotReply(buildSmartFaqReply(faqReply, rawText, currentLanguage));
   }
 
-  const aiReply = await getAiReply({
-    message:
-      currentLanguage === "mk"
-        ? `
-Ти си web chat асистент за Laki Hotel & Spa.
-
-Одговарај како пријателски, професионален хотелски рецепционер и sales асистент.
-Тонот да биде топол, природен, љубезен и малку подетален, но едноставен.
-Не пишувај премногу долги одговори.
-
-Правила:
-- Прво одговори директно на прашањето на гостинот.
-- Не измислувај цени, достапност, услуги, типови соби или политики.
-- Ако прашањето е за цена или достапност, насочи го гостинот кон барање за понуда.
-- Ако нема сигурна информација, кажи дека хотелскиот тим ќе потврди.
-- Ако одговорот не е сигурен, упати го гостинот на ${hotelKnowledge.hotel.email} и ${hotelKnowledge.hotel.phone}.
-- Не нуди големо мени со бројки.
-- На крај, ако е природно, постави едно кратко прашање за да продолжи разговорот.
-
-Прашање од гостин:
-${rawText}
-        `
-        : `
-You are the web chat assistant for Laki Hotel & Spa.
-
-Reply like a friendly, professional hotel receptionist and sales assistant.
-The tone should be warm, natural, polite and slightly detailed, but simple.
-Do not write very long answers.
-
-Rules:
-- First answer the guest's question directly.
-- Never invent prices, availability, services, room types, or policies.
-- If the guest asks about price or availability, guide them toward an offer request.
-- If information is uncertain, say the hotel team will confirm it.
-- If the answer is uncertain, direct the guest to ${hotelKnowledge.hotel.email} and ${hotelKnowledge.hotel.phone}.
-- Do not offer a large numbered menu.
-- At the end, if natural, ask one short question to continue the conversation.
-
-Guest question:
-${rawText}
-        `,
-    language: currentLanguage,
-    faqContext: hotelKnowledge.faq
-      .map((f) => `${f.id}: ${currentLanguage === "mk" ? f.textMk : f.textEn}`)
-      .join("\n"),
-  });
+  const aiReply = await getSafeAiReply(rawText, currentLanguage);
 
   if (aiReply) {
     if (isExplicitOfferRequest(rawText, currentLanguage)) {
       return startInquiryFlow(from, currentLanguage);
     }
 
-    return aiReply;
+    return cleanBotReply(aiReply);
   }
 
   return getHumanFallback(currentLanguage);
@@ -1102,15 +1292,18 @@ app.get("/", (req, res) => {
   res.status(200).json({
     service: "Laki Web Chat Bot",
     status: "running",
-    version: "3.1.0-smart-room-flow",
+    version: "5.0.0-parser-flow-fix",
     features: [
       "FAQ",
       "Inquiry Flow",
-      "Quick Room Flow",
       "Email",
       "AI Intent",
       "Smart Greeting",
       "No Menu Spam",
+      "Smart Date Parser",
+      "No AI when dates are detected",
+      "Short Replies",
+      "Reply-To Guest Email",
     ],
     timestamp: new Date().toISOString(),
   });
@@ -1124,7 +1317,7 @@ app.post("/chat", async (req, res) => {
       return res.json({ reply: "No message provided" });
     }
 
-    const from = userId || "web-user";
+    const from = userId || req.ip || "web-user";
     const reply = await processGuestMessage(from, message.trim());
 
     return res.json({ reply });
@@ -1132,7 +1325,7 @@ app.post("/chat", async (req, res) => {
     console.error("Webchat error:", err);
     return res.status(500).json({
       reply:
-        "There was a technical problem. Please contact us at contact@lakihotelspa.com or +389 46 203 333.",
+        "There was a technical problem. Please try again in a moment.",
     });
   }
 });
