@@ -727,8 +727,29 @@ Message: "${message}"
       faqContext: "",
     });
 
-    const clean = (ai || "").replace(/```json|```/g, "").trim();
-    return JSON.parse(clean);
+    let clean = (ai || "")
+  .replace(/```json|```/g, "")
+  .trim();
+
+// најди JSON дел ако има мешан текст
+const jsonMatch = clean.match(/\{[\s\S]*\}/);
+
+if (jsonMatch) {
+  clean = jsonMatch[0];
+}
+
+try {
+  return JSON.parse(clean);
+} catch (err) {
+  console.error("AI intent parse fallback:", clean);
+
+  return {
+    intent: "unknown",
+    guestType: "none",
+    needsInquiry: false,
+    confidence: 0,
+  };
+}
   } catch (err) {
     console.error("AI intent error:", err?.message || err);
     return {
