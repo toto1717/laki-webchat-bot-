@@ -13,6 +13,7 @@ const PORT = process.env.PORT || 3000;
 
 const userLanguage = {};
 const userInquiryState = {};
+const userQuickFlow = {};
 
 const COMMANDS = {
   menu: ["menu", "мени"],
@@ -56,7 +57,6 @@ function detectLanguage(text = "") {
     "kolku",
     "deca",
     "dete",
-    "bebе",
     "bebe",
     "sakame",
     "sakam",
@@ -132,6 +132,79 @@ function addSoftNextStep(replyText, language, options = {}) {
     replyText +
     "\n\nIf you are planning a stay, I can help you send an offer request with your dates and number of guests 😊"
   );
+}
+
+function detectMonthNumber(text = "") {
+  const t = text.toLowerCase();
+
+  const months = [
+    { keys: ["јануари", "januari", "january"], value: "01" },
+    { keys: ["февруари", "fevruari", "february"], value: "02" },
+    { keys: ["март", "mart", "march"], value: "03" },
+    { keys: ["април", "april"], value: "04" },
+    { keys: ["мај", "maj", "may"], value: "05" },
+    { keys: ["јуни", "juni", "june"], value: "06" },
+    { keys: ["јули", "juli", "july"], value: "07" },
+    { keys: ["август", "avgust", "august"], value: "08" },
+    { keys: ["септември", "septemvri", "september"], value: "09" },
+    { keys: ["октомври", "oktomvri", "october"], value: "10" },
+    { keys: ["ноември", "noemvri", "november"], value: "11" },
+    { keys: ["декември", "dekemvri", "december"], value: "12" },
+  ];
+
+  for (const month of months) {
+    if (month.keys.some((key) => t.includes(key))) return month.value;
+  }
+
+  return null;
+}
+
+function padDay(value) {
+  return String(value).padStart(2, "0");
+}
+
+function extractBookingInfo(text = "") {
+  const t = text.toLowerCase();
+
+  let checkin = null;
+  let checkout = null;
+  let guests = null;
+
+  const month = detectMonthNumber(t);
+  const yearMatch = t.match(/\b(20\d{2})\b/);
+  const year = yearMatch ? yearMatch[1] : "2026";
+
+  const fullDateMatches = [...t.matchAll(/(\d{1,2})\.(\d{1,2})\.(20\d{2})/g)];
+
+  if (fullDateMatches.length >= 2) {
+    checkin = `${padDay(fullDateMatches[0][1])}.${padDay(fullDateMatches[0][2])}.${fullDateMatches[0][3]}`;
+    checkout = `${padDay(fullDateMatches[1][1])}.${padDay(fullDateMatches[1][2])}.${fullDateMatches[1][3]}`;
+  } else {
+    const rangeMatch = t.match(/(\d{1,2})\s*(?:до|-|–|—|\/)\s*(\d{1,2})/);
+
+    if (rangeMatch && month) {
+      checkin = `${padDay(rangeMatch[1])}.${month}.${year}`;
+      checkout = `${padDay(rangeMatch[2])}.${month}.${year}`;
+    } else if (rangeMatch) {
+      checkin = rangeMatch[1];
+      checkout = rangeMatch[2];
+    }
+  }
+
+  if (t.includes("два") || t.includes("2") || t.includes("two")) guests = 2;
+  if (t.includes("три") || t.includes("3") || t.includes("three")) guests = 3;
+  if (t.includes("четири") || t.includes("4") || t.includes("four")) guests = 4;
+
+  return { checkin, checkout, guests };
+}
+
+function detectRoomType(text = "") {
+  const t = text.toLowerCase();
+
+  if (t.includes("соба") || t.includes("room")) return "room";
+  if (t.includes("апартман") || t.includes("apartment")) return "apartment";
+
+  return null;
 }
 
 function detectDirectIntent(text = "", language = "en") {
@@ -238,6 +311,7 @@ function getDirectIntentReply(intent, language) {
 
 function resetInquiryFlow(from) {
   delete userInquiryState[from];
+  delete userQuickFlow[from];
 }
 
 function startInquiryFlow(from, language) {
@@ -691,7 +765,10 @@ Message: "${message}"
       faqContext: "",
     });
 
-    const clean = (ai || "").replace(/```json|```/g, "").trim();
+    let clean = (ai || "").replace(/```json|```/g, "").trim();
+    const jsonMatch = clean.match(/\{[\s\S]*\}/);
+    if (jsonMatch) clean = jsonMatch[0];
+
     return JSON.parse(clean);
   } catch (err) {
     console.error("AI intent error:", err?.message || err);
@@ -800,11 +877,6 @@ async function processGuestMessage(from, rawText) {
     return "Session reset successfully / Сесијата е успешно ресетирана.\n\n" + getLanguageMenu();
   }
 
-  if (userInquiryState[from]) {
-    reply = await handleInquiryStep(from, rawText);
-    if (reply) return reply;
-  }
-
   if (!currentLanguage) {
     if (text === "1" || text === "english" || text === "en") {
       userLanguage[from] = "en";
@@ -819,6 +891,91 @@ async function processGuestMessage(from, rawText) {
     const detectedLanguage = detectLanguage(rawText);
     userLanguage[from] = detectedLanguage;
     return getSmartGreeting(detectedLanguage);
+  }
+
+  if (userQuickFlow[from]) {
+    const flow = userQuickFlow[from];
+    const parsed = extractBookingInfo(rawText);
+
+    if (flow.step === "dates") {
+      if (parsed.checkin && parsed.checkout) {
+        flow.data = {
+          ...flow.data,
+          checkin: parsed.checkin,
+          checkout: parsed.checkout,
+          guests: parsed.guests || flow.data.guests || 2,
+        };
+
+        flow.step = "email";
+
+        return currentLanguage === "mk"
+          ? `Одлично 👍 ${flow.data.checkin}-${flow.data.checkout} за ${flow.data.guests} лица.\n\nВнесете e-mail за да ја испратиме понудата 📧`
+          : `Great 👍 ${flow.data.checkin}-${flow.data.checkout} for ${flow.data.guests} guests.\n\nPlease enter your email so we can send the offer 📧`;
+      }
+
+      return currentLanguage === "mk"
+        ? "Само внесете ги датумите 😊\nПример: 20 до 26 јуни двајца"
+        : "Please enter the dates 😊\nExample: 20 to 26 June for two";
+    }
+
+    if (flow.step === "email") {
+      if (!isValidEmail(rawText.trim())) {
+        return currentLanguage === "mk"
+          ? "Внесете валидна e-mail адреса 😊"
+          : "Please enter a valid email address 😊";
+      }
+
+      try {
+        await sendInquiryEmail({
+          fromWebchat: from,
+          language: currentLanguage,
+          roomType: flow.data.type,
+          checkin: flow.data.checkin,
+          checkout: flow.data.checkout,
+          adults: flow.data.guests || 2,
+          children: "0",
+          childrenAges: "",
+          name: "Web chat guest",
+          email: rawText.trim(),
+          specialRequest: "Quick room offer request",
+          replyTo: rawText.trim(),
+        });
+
+        delete userQuickFlow[from];
+
+        return currentLanguage === "mk"
+          ? "Барањето е испратено ✅ Ќе добиете понуда наскоро 😊"
+          : "Request sent ✅ You will receive an offer soon 😊";
+      } catch (err) {
+        console.error("Quick flow email error:", err?.message || err);
+        delete userQuickFlow[from];
+
+        return currentLanguage === "mk"
+          ? `Барањето е примено, но има проблем со автоматското e-mail испраќање. Ве молиме контактирајте нè директно: ${hotelKnowledge.hotel.email} / ${hotelKnowledge.hotel.phone}`
+          : `Your request was received, but there is a problem with automatic email delivery. Please contact us directly: ${hotelKnowledge.hotel.email} / ${hotelKnowledge.hotel.phone}`;
+      }
+    }
+  }
+
+  if (
+    !userInquiryState[from] &&
+    !userQuickFlow[from] &&
+    (text.includes("соба") || text.includes("room"))
+  ) {
+    userQuickFlow[from] = {
+      step: "dates",
+      language: currentLanguage,
+      data: { type: "room" },
+    };
+
+    return currentLanguage === "mk"
+      ? "Супер 😊 Кажете ми ги датумите на престој."
+      : "Great 😊 Please tell me your stay dates.";
+  }
+
+  if (userInquiryState[from]) {
+    reply = await handleInquiryStep(from, rawText);
+    if (reply) return reply;
   }
 
   if (matchesCommand(rawText, COMMANDS.menu)) {
@@ -945,8 +1102,16 @@ app.get("/", (req, res) => {
   res.status(200).json({
     service: "Laki Web Chat Bot",
     status: "running",
-    version: "3.0.0-smart-ux",
-    features: ["FAQ", "Inquiry Flow", "Email", "AI Intent", "Smart Greeting", "No Menu Spam"],
+    version: "3.1.0-smart-room-flow",
+    features: [
+      "FAQ",
+      "Inquiry Flow",
+      "Quick Room Flow",
+      "Email",
+      "AI Intent",
+      "Smart Greeting",
+      "No Menu Spam",
+    ],
     timestamp: new Date().toISOString(),
   });
 });
