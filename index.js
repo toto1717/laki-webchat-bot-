@@ -1,3 +1,39 @@
+// =========================
+// 🧠 SMART INPUT PARSER
+// =========================
+function extractBookingInfo(text) {
+  const t = text.toLowerCase();
+
+  let checkin = null;
+  let checkout = null;
+  let guests = null;
+
+  // dates like: 20-26 june / 20 до 26 јуни
+  const dateMatch = t.match(/(\d{1,2}).*(\d{1,2})/);
+  if (dateMatch) {
+    checkin = dateMatch[1];
+    checkout = dateMatch[2];
+  }
+
+  // guests
+  if (t.includes("два") || t.includes("2")) guests = 2;
+  if (t.includes("три") || t.includes("3")) guests = 3;
+  if (t.includes("четири") || t.includes("4")) guests = 4;
+
+  return { checkin, checkout, guests };
+}
+
+// =========================
+// 🧠 ROOM TYPE DETECTION
+// =========================
+function detectRoomType(text) {
+  const t = text.toLowerCase();
+
+  if (t.includes("соба") || t.includes("room")) return "room";
+  if (t.includes("апартман") || t.includes("apartment")) return "apartment";
+
+  return null;
+}
 import express from "express";
 import dotenv from "dotenv";
 import { getFaqReply, hotelKnowledge } from "./knowledge.js";
@@ -783,6 +819,39 @@ function getGuestTypeReply(guestType, currentLanguage) {
   return null;
 }
 
+// =========================
+// 🧠 SMART PARSER V2
+// =========================
+function extractBookingInfo(text) {
+  const t = text.toLowerCase();
+
+  let checkin = null;
+  let checkout = null;
+  let guests = null;
+
+  // numbers (20–26)
+  const match = t.match(/(\d{1,2}).*(\d{1,2})/);
+  if (match) {
+    checkin = match[1];
+    checkout = match[2];
+  }
+
+  // guests
+  if (t.includes("два") || t.includes("2")) guests = 2;
+  if (t.includes("три") || t.includes("3")) guests = 3;
+  if (t.includes("четири") || t.includes("4")) guests = 4;
+
+  return { checkin, checkout, guests };
+}
+
+function detectRoomType(text) {
+  const t = text.toLowerCase();
+
+  if (t.includes("соба") || t.includes("room")) return "room";
+  if (t.includes("апартман") || t.includes("apartment")) return "apartment";
+
+  return null;
+}
 async function processGuestMessage(from, rawText) {
   const text = rawText.toLowerCase().trim();
   let reply = "";
@@ -805,6 +874,60 @@ async function processGuestMessage(from, rawText) {
     if (reply) return reply;
   }
 
+  // =========================
+// ⚡ SMART QUICK BOOKING V2
+// =========================
+const parsed = extractBookingInfo(rawText);
+const roomType = detectRoomType(rawText);
+
+// ако user кажал „соба“
+if (
+  rawText.toLowerCase().includes("соба") ||
+  rawText.toLowerCase().includes("room")
+) {
+  userInquiryState[from] = {
+    step: "quick_booking",
+    language: currentLanguage,
+    data: {
+      roomType,
+      ...parsed,
+    },
+  };
+
+  return currentLanguage === "mk"
+    ? "Супер 😊 Кои датуми ги планирате?"
+    : "Great 😊 What dates are you planning?";
+}
+
+// ако внесе датум одма
+if (userInquiryState[from]?.step === "quick_booking") {
+  if (parsed.checkin && parsed.checkout) {
+    userInquiryState[from].data.checkin = parsed.checkin;
+    userInquiryState[from].data.checkout = parsed.checkout;
+    userInquiryState[from].data.guests = parsed.guests || 2;
+
+    userInquiryState[from].step = "email";
+
+    return currentLanguage === "mk"
+      ? `Одлично 👍 ${parsed.checkin}–${parsed.checkout} за ${userInquiryState[from].data.guests} лица.\n\nСамо уште e-mail за понуда 📧`
+      : `Great 👍 ${parsed.checkin}-${parsed.checkout} for ${userInquiryState[from].data.guests} guests.\n\nPlease provide your email 📧`;
+  }
+}
+
+// email step
+if (userInquiryState[from]?.step === "email") {
+  await sendInquiryEmail({
+    ...userInquiryState[from].data,
+    email: rawText.trim(),
+    fromWebchat: from,
+  });
+
+  delete userInquiryState[from];
+
+  return currentLanguage === "mk"
+    ? "Барањето е испратено ✅ Ќе добиете понуда наскоро 😊"
+    : "Request sent ✅ You will receive an offer soon 😊";
+}
   if (!currentLanguage) {
     if (text === "1" || text === "english" || text === "en") {
       userLanguage[from] = "en";
