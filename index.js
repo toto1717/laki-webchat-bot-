@@ -1,5 +1,6 @@
 import express from "express";
 import dotenv from "dotenv";
+import dns from "dns/promises";
 import { getFaqReply, hotelKnowledge } from "./knowledge.js";
 import { sendInquiryEmail } from "./mailer.js";
 import { getAiReply } from "./ai.js";
@@ -7,12 +8,21 @@ import { getAiReply } from "./ai.js";
 dotenv.config();
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "50kb" }));
 
 const PORT = process.env.PORT || 3000;
 
 const userLanguage = {};
 const userInquiryState = {};
+
+const chatRateLimit = {};
+const inquiryRateLimit = {};
+
+const CHAT_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const CHAT_RATE_LIMIT_MAX_MESSAGES = 35;
+
+const INQUIRY_RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
+const INQUIRY_RATE_LIMIT_MAX_EMAILS = 3;
 
 const COMMANDS = {
   menu: ["menu", "мени", "meni"],
@@ -21,6 +31,23 @@ const COMMANDS = {
   cancel: ["cancel", "откажи", "otkazi", "stop", "стоп", "anulo"],
   contact: ["contact", "контакт", "kontakt"],
 };
+
+function hitRateLimit(key, store, maxHits, windowMs) {
+  const now = Date.now();
+
+  if (!store[key]) {
+    store[key] = [];
+  }
+
+  store[key] = store[key].filter((timestamp) => now - timestamp < windowMs);
+
+  if (store[key].length >= maxHits) {
+    return true;
+  }
+
+  store[key].push(now);
+  return false;
+}
 
 function normalizeCommand(text = "") {
   return text.trim().toLowerCase();
@@ -51,6 +78,163 @@ function getLanguageLabel(language = "en") {
 
 function textByLanguage(language, values) {
   return values[language] || values.en || values.mk || "";
+}
+
+function getInvalidEmailMessage(language = "en") {
+  return textByLanguage(language, {
+    mk: "Внесете валидна e-mail адреса за понуда 😊",
+    en: "Please enter a valid email address for the offer 😊",
+    sr: "Unesite validnu e-mail adresu za ponudu 😊",
+    sq: "Shkruani një email adresë të vlefshme për ofertën 😊",
+  });
+}
+
+function normalizeEmail(value = "") {
+  return String(value || "").trim().toLowerCase();
+}
+
+function hasBasicEmailFormat(value = "") {
+  const email = normalizeEmail(value);
+
+  if (email.length < 6 || email.length > 254) return false;
+  if (email.includes("..")) return false;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return false;
+
+  const [local, domain] = email.split("@");
+
+  if (!local || !domain) return false;
+  if (local.length < 2) return false;
+  if (domain.length < 4) return false;
+  if (!domain.includes(".")) return false;
+  if (domain.startsWith(".") || domain.endsWith(".")) return false;
+  if (domain.includes("_")) return false;
+
+  return true;
+}
+
+function isBlockedFakeEmail(value = "") {
+  const email = normalizeEmail(value);
+  const [local, domain] = email.split("@");
+
+  const blockedExactEmails = new Set([
+    "test@test.com",
+    "test@gmail.com",
+    "test@hotmail.com",
+    "test@yahoo.com",
+    "test@outlook.com",
+    "fake@fake.com",
+    "fake@gmail.com",
+    "demo@demo.com",
+    "demo@gmail.com",
+    "example@example.com",
+    "admin@admin.com",
+    "mail@mail.com",
+    "a@a.com",
+    "aa@aa.com",
+    "asdf@asdf.com",
+    "qwerty@qwerty.com",
+    "user@user.com",
+    "guest@guest.com",
+  ]);
+
+  const blockedDomains = new Set([
+    "test.com",
+    "example.com",
+    "example.org",
+    "example.net",
+    "fake.com",
+    "demo.com",
+    "invalid.com",
+    "asdf.com",
+    "qwerty.com",
+    "localhost.com",
+    "mailinator.com",
+    "yopmail.com",
+    "guerrillamail.com",
+    "10minutemail.com",
+    "tempmail.com",
+    "temp-mail.org",
+    "trashmail.com",
+  ]);
+
+  const blockedLocalParts = new Set([
+    "test",
+    "fake",
+    "demo",
+    "example",
+    "asdf",
+    "qwerty",
+    "aaa",
+    "aaaa",
+    "user",
+    "guest",
+    "none",
+    "no",
+    "mail",
+    "email",
+  ]);
+
+  if (blockedExactEmails.has(email)) return true;
+  if (blockedDomains.has(domain)) return true;
+
+  if (blockedLocalParts.has(local)) {
+    const commonDomains = [
+      "gmail.com",
+      "hotmail.com",
+      "outlook.com",
+      "yahoo.com",
+      "icloud.com",
+      "live.com",
+    ];
+
+    if (commonDomains.includes(domain)) return true;
+  }
+
+  if (/^(.)\1{3,}$/.test(local)) return true;
+  if (/^(123|1234|12345|1111|0000)/.test(local)) return true;
+
+  return false;
+}
+
+async function hasValidEmailDomain(value = "") {
+  const email = normalizeEmail(value);
+  const domain = email.split("@")[1];
+
+  if (!domain) return false;
+
+  const trustedDomains = new Set([
+    "gmail.com",
+    "hotmail.com",
+    "outlook.com",
+    "yahoo.com",
+    "icloud.com",
+    "live.com",
+    "proton.me",
+    "protonmail.com",
+  ]);
+
+  if (trustedDomains.has(domain)) return true;
+
+  try {
+    const mxRecords = await Promise.race([
+      dns.resolveMx(domain),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("DNS timeout")), 2500)
+      ),
+    ]);
+
+    return Array.isArray(mxRecords) && mxRecords.length > 0;
+  } catch (error) {
+    return false;
+  }
+}
+
+async function isValidEmailForInquiry(value = "") {
+  if (!hasBasicEmailFormat(value)) return false;
+  if (isBlockedFakeEmail(value)) return false;
+  if (!(await hasValidEmailDomain(value))) return false;
+
+  return true;
 }
 
 function detectLanguage(text = "") {
@@ -583,14 +767,16 @@ function detectRoomType(text = "") {
     t.includes("room") ||
     t.includes("soba") ||
     t.includes("dhom")
-  ) return "room";
+  )
+    return "room";
 
   if (
     t.includes("апартман") ||
     t.includes("apartment") ||
     t.includes("apartman") ||
     t.includes("apartament")
-  ) return "apartment";
+  )
+    return "apartment";
 
   return null;
 }
@@ -752,10 +938,6 @@ function isValidName(value) {
   return /[A-Za-zА-Ша-шЃѓЌќЉљЊњЏџЅѕČčĆćŽžŠšĐđÇçËë]/.test(trimmed);
 }
 
-function isValidEmail(value) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
-}
-
 function isValidChildrenAges(value) {
   const trimmed = value.trim();
   if (!trimmed) return false;
@@ -832,39 +1014,6 @@ function isRoomOrApartmentRequest(text = "") {
     t.includes("dhom") ||
     t.includes("apartament")
   );
-}
-
-function isGeneralHotelQuestion(text) {
-  const t = text.toLowerCase();
-
-  return [
-    "романтичен",
-    "релаксација",
-    "атмосфера",
-    "викенд",
-    "за парови",
-    "што предлагаш",
-    "кажи ми повеќе",
-    "ме интересира",
-    "се за хотелот",
-    "што нудите",
-    "tell me more",
-    "recommend",
-    "romantic",
-    "relax",
-    "what do you offer",
-    "interested in the hotel",
-    "preporuka",
-    "romanticno",
-    "romantično",
-    "šta nudite",
-    "sta nudite",
-    "interesuje me",
-    "më tregoni",
-    "me tregoni",
-    "çfarë ofroni",
-    "cfare ofroni",
-  ].some((k) => t.includes(k));
 }
 
 function formatChildrenValue(count, ages, language) {
@@ -1103,16 +1252,13 @@ async function handleInquiryStep(from, rawText) {
   }
 
   if (inquiry.step === "email") {
-    if (!isValidEmail(msg)) {
-      return textByLanguage(language, {
-        mk: "Внесете валидна e-mail адреса 😊",
-        en: "Please enter a valid email address 😊",
-        sr: "Unesite validnu e-mail adresu 😊",
-        sq: "Shkruani një email adresë të vlefshme 😊",
-      });
+    const cleanEmail = normalizeEmail(msg);
+
+    if (!(await isValidEmailForInquiry(cleanEmail))) {
+      return getInvalidEmailMessage(language);
     }
 
-    inquiry.data.email = msg;
+    inquiry.data.email = cleanEmail;
     inquiry.step = "special_request";
 
     return textByLanguage(language, {
@@ -1124,17 +1270,29 @@ async function handleInquiryStep(from, rawText) {
   }
 
   if (inquiry.step === "special_request") {
-    const noRequestWords = [
-      "нема",
-      "none",
-      "nema",
-      "no",
-      "nuk ka",
-      "ska",
-      "jo",
-    ];
+    const noRequestWords = ["нема", "none", "nema", "no", "nuk ka", "ska", "jo"];
 
     inquiry.data.specialRequest = noRequestWords.includes(lowerMsg) ? "" : msg;
+
+    const inquiryKey = `inquiry:${from}`;
+
+    if (
+      hitRateLimit(
+        inquiryKey,
+        inquiryRateLimit,
+        INQUIRY_RATE_LIMIT_MAX_EMAILS,
+        INQUIRY_RATE_LIMIT_WINDOW_MS
+      )
+    ) {
+      resetInquiryFlow(from);
+
+      return textByLanguage(language, {
+        mk: "Испратени се повеќе барања за кратко време. Ве молиме пробајте повторно подоцна 😊",
+        en: "Several requests were sent in a short time. Please try again later 😊",
+        sr: "Poslato je više upita u kratkom vremenu. Molimo pokušajte kasnije 😊",
+        sq: "Janë dërguar disa kërkesa në kohë të shkurtër. Ju lutemi provoni më vonë 😊",
+      });
+    }
 
     const emailPayload = {
       fromWebchat: from,
@@ -1408,9 +1566,7 @@ Guest question:
 ${rawText}
         `,
     language: currentLanguage,
-    faqContext: hotelKnowledge.faq
-      .map((f) => `${f.id}`)
-      .join("\n"),
+    faqContext: hotelKnowledge.faq.map((f) => `${f.id}`).join("\n"),
   });
 
   return cleanBotReply(aiReply);
@@ -1571,8 +1727,14 @@ app.get("/", (req, res) => {
   res.status(200).json({
     service: "Laki Web Chat Bot",
     status: "running",
-    version: "6.0.0-four-languages",
+    version: "6.1.0-security-email-validation",
     languages: ["mk", "en", "sr", "sq"],
+    security: [
+      "rate_limit",
+      "fake_email_block",
+      "mx_domain_check",
+      "email_quality_check",
+    ],
     features: [
       "FAQ",
       "Inquiry Flow",
@@ -1602,6 +1764,20 @@ app.post("/chat", async (req, res) => {
     }
 
     const from = userId || req.ip || "web-user";
+
+    if (
+      hitRateLimit(
+        `chat:${from}`,
+        chatRateLimit,
+        CHAT_RATE_LIMIT_MAX_MESSAGES,
+        CHAT_RATE_LIMIT_WINDOW_MS
+      )
+    ) {
+      return res.status(429).json({
+        reply: "Too many messages. Please try again in a moment.",
+      });
+    }
+
     const reply = await processGuestMessage(from, message.trim());
 
     return res.json({ reply });
